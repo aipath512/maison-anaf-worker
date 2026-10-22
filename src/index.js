@@ -5,12 +5,12 @@
  */
 const ANAF_URL = "https://webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva";
 const MAX_BATCH = 100;
-const LEASE_MS = 15 * 60 * 1000; // 15-minute D1 lease; renewed before every batch.
+const LEASE_MS = 60 * 1000; // Short recovery lease; renewed per batch.
 const MAX_PASS_LIMIT = 100000; // staged targets: 10000, 50000, 100000.
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(run(env, `cron:${event.cron}`));
+    await run(env, `cron:${event.cron}`);
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
