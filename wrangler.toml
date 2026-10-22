@@ -6,7 +6,7 @@ compatibility_date = "2026-10-22"
 crons = ["0 6 * * *"]
 
 [vars]
-DAILY_LIMIT = "10"
+DAILY_LIMIT = "1000"
 
 [[d1_databases]]
 binding = "DB"
