@@ -131,19 +131,15 @@ async function run(env, trigger) {
     }
     const state=await db.prepare("SELECT value FROM maison_anaf_state WHERE key='last_cui'").first();
     const last=Number(state?.value || 0);
-    const target = 5000;
-    const progressRow = await db.prepare("SELECT value FROM maison_anaf_state WHERE key='test_5000_progress'").first();
-    const progress = Math.max(0, Number(progressRow?.value || 0));
-    const limit = Math.min(5000, Math.max(0, target-progress));
-    if(limit===0) detail="5000-CUI test complete; no additional work";
+    const limit = 5000;
     // onrc_firme.CUI exists in the known schema; cast to integer for stable cursor.
-    const rows=limit>0 ? (await db.prepare(`
+    const rows=(await db.prepare(`
       SELECT DISTINCT CAST(CUI AS INTEGER) AS cui
       FROM onrc_firme
       WHERE CAST(CUI AS INTEGER) > ? AND CAST(CUI AS INTEGER) > 0
       ORDER BY CAST(CUI AS INTEGER) ASC LIMIT ?
-    `).bind(last,limit).all()).results || [] : [];
-    if(rows.length===0 && limit>0) {
+    `).bind(last,limit).all()).results || [];
+    if(rows.length===0) {
       detail="Reached end of CUI list; cursor reset to 0 for next run";
       await db.prepare("INSERT INTO maison_anaf_state(key,value) VALUES('last_cui','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
     }
@@ -173,7 +169,6 @@ async function run(env, trigger) {
           INSERT INTO maison_anaf_state(key,value) VALUES('last_cui',?)
           ON CONFLICT(key) DO UPDATE SET value=excluded.value
         `).bind(String(batch[batch.length-1])));
-        statements.push(db.prepare("INSERT INTO maison_anaf_state(key,value) VALUES('test_5000_progress',?) ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+?").bind(String(batch.length),batch.length));
         await renewLease(db,owner);
         await db.batch(statements);
         checked+=batch.length;
