@@ -1,0 +1,14 @@
+name = "maison-anaf-daily"
+main = "src/index.js"
+compatibility_date = "2026-10-22"
+
+[triggers]
+crons = ["0 6 * * *"] # 06:00 UTC = 09:00 Romania winter / 08:00 summer
+
+[vars]
+DAILY_LIMIT = "1000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "b2b-romania-db"
+database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
