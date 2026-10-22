@@ -6,6 +6,7 @@
 const ANAF_URL = "https://webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva";
 const MAX_BATCH = 100;
 const LEASE_MS = 15 * 60 * 1000; // 15-minute D1 lease; renewed before every batch.
+const MAX_PASS_LIMIT = 100000; // staged targets: 10000, 50000, 100000.
 
 export default {
   async scheduled(event, env, ctx) {
@@ -125,21 +126,26 @@ async function run(env, trigger) {
     }
     const state=await db.prepare("SELECT value FROM maison_anaf_state WHERE key='last_cui'").first();
     const last=Number(state?.value || 0);
-    const limit=Math.min(1000,Math.max(1,Number(env.DAILY_LIMIT||1000)));
+    const limit=Math.min(MAX_PASS_LIMIT,Math.max(1,Math.trunc(Number(env.DAILY_LIMIT||10000))||10000));
     // onrc_firme.CUI exists in the known schema; cast to integer for stable cursor.
-    const rows=(await db.prepare(`
-      SELECT DISTINCT CAST(CUI AS INTEGER) AS cui
-      FROM onrc_firme
-      WHERE CAST(CUI AS INTEGER) > ? AND CAST(CUI AS INTEGER) > 0
-      ORDER BY CAST(CUI AS INTEGER) ASC LIMIT ?
-    `).bind(last,limit).all()).results || [];
-    if(rows.length===0) {
+    // Page in batches of 100: avoid D1 result-size limits at 10k/50k/100k.
+    let cursor=last;
+    for(let processed=0;processed<limit;processed+=MAX_BATCH) {
       await renewLease(db,owner);
-      detail="Reached end of CUI list; cursor reset to 0 for next run";
-      await db.prepare("INSERT INTO maison_anaf_state(key,value) VALUES('last_cui','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
-    }
-    for(let i=0;i<rows.length;i+=MAX_BATCH) {
-      const batch=rows.slice(i,i+MAX_BATCH).map(x=>Number(x.cui));
+      const rows=(await db.prepare(`
+        SELECT DISTINCT CAST(CUI AS INTEGER) AS cui
+        FROM onrc_firme
+        WHERE CAST(CUI AS INTEGER) > ? AND CAST(CUI AS INTEGER) > 0
+        ORDER BY CAST(CUI AS INTEGER) ASC LIMIT ?
+      `).bind(cursor,Math.min(MAX_BATCH,limit-processed)).all()).results || [];
+      if(rows.length===0) {
+        if(processed===0) {
+          detail="Reached end of CUI list; cursor reset to 0 for next run";
+          await db.prepare("INSERT INTO maison_anaf_state(key,value) VALUES('last_cui','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+        }
+        break;
+      }
+      const batch=rows.map(x=>Number(x.cui));
       try {
         await renewLease(db,owner);
         const result=await fetchAnaf(batch,day);
@@ -167,6 +173,7 @@ async function run(env, trigger) {
         await renewLease(db,owner);
         await db.batch(statements);
         checked+=batch.length;
+        cursor=batch[batch.length-1];
         found+=batchFound;
         missing+=batchMissing;
       } catch(e) {
