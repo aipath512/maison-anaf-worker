@@ -4,7 +4,7 @@
  * Does NOT publish numbers or send them in notifications.
  */
 const ANAF_URL = "https://webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva";
-const MAX_BATCH = 100;
+const MAX_BATCH = 1000; // EXPERIMENT: ANAF acceptance of 1000-item requests is unverified.
 const LEASE_MS = 90 * 1000; // Recovered automatically after interrupted invocations.
 
 export default {
@@ -134,7 +134,7 @@ async function run(env, trigger) {
     const target = 5000;
     const progressRow = await db.prepare("SELECT value FROM maison_anaf_state WHERE key='test_5000_progress'").first();
     const progress = Math.max(0, Number(progressRow?.value || 0));
-    const limit = Math.min(1000, Math.max(0, target-progress));
+    const limit = Math.min(5000, Math.max(0, target-progress));
     if(limit===0) detail="5000-CUI test complete; no additional work";
     // onrc_firme.CUI exists in the known schema; cast to integer for stable cursor.
     const rows=limit>0 ? (await db.prepare(`
