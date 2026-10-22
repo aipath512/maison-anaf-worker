@@ -5,10 +5,11 @@
  */
 const ANAF_URL = "https://webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva";
 const MAX_BATCH = 100;
+const LEASE_MS = 90 * 1000; // Recovered automatically after interrupted invocations.
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(run(env, `cron:${event.cron}`));
+    await run(env, `cron:${event.cron}`);
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -32,6 +33,7 @@ async function setup(db) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS maison_anaf_lock (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS maison_anaf_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_at TEXT NOT NULL,
@@ -77,13 +79,43 @@ async function fetchAnaf(batch, date) {
   } finally {clearTimeout(timer);}
 }
 
+async function acquireLease(db, owner) {
+  const now=Date.now();
+  const row=await db.prepare(`
+    INSERT INTO maison_anaf_lock(name,owner,expires_at) VALUES('daily',?,?)
+    ON CONFLICT(name) DO UPDATE SET owner=excluded.owner, expires_at=excluded.expires_at
+    WHERE maison_anaf_lock.expires_at <= ?
+    RETURNING owner
+  `).bind(owner,now+LEASE_MS,now).first();
+  return row?.owner===owner;
+}
+async function renewLease(db, owner) {
+  const now=Date.now();
+  const row=await db.prepare(`
+    UPDATE maison_anaf_lock SET expires_at=?
+    WHERE name='daily' AND owner=? AND expires_at>?
+    RETURNING owner
+  `).bind(now+LEASE_MS,owner,now).first();
+  if(row?.owner!==owner) throw new Error("Lease lost: refusing stale write");
+}
+async function releaseLease(db, owner) {
+  await db.prepare("DELETE FROM maison_anaf_lock WHERE name='daily' AND owner=?").bind(owner).run();
+}
+
 async function run(env, trigger) {
   const db=env.DB;
   const day=isoDay(), now=new Date().toISOString();
   let checked=0,found=0,missing=0,failed=0;
   let detail="", notice="not_sent";
+  const owner=crypto.randomUUID();
+  let leaseHeld=false;
   try {
     await setup(db);
+    leaseHeld=await acquireLease(db,owner);
+    if(!leaseHeld) {
+      console.log(JSON.stringify({checked:0,found:0,missing:0,failed:0,detail:"Skipped: another run owns the lease",notice:"not_sent"}));
+      return;
+    }
     const state=await db.prepare("SELECT value FROM maison_anaf_state WHERE key='last_cui'").first();
     const last=Number(state?.value || 0);
     const limit=Math.min(1000,Math.max(1,Number(env.DAILY_LIMIT||1000)));
@@ -101,15 +133,17 @@ async function run(env, trigger) {
     for(let i=0;i<rows.length;i+=MAX_BATCH) {
       const batch=rows.slice(i,i+MAX_BATCH).map(x=>Number(x.cui));
       try {
+        await renewLease(db,owner);
         const result=await fetchAnaf(batch,day);
         const byCui=new Map(result.found.map(x=>[Number(x?.date_generale?.cui),x]));
         const notFound=new Set(result.notFound.map(x=>Number(typeof x==="object" ? (x.cui??x.CUI) : x)));
         const statements=[];
+        let batchFound=0, batchMissing=0;
         for(const cui of batch) {
           const record=byCui.get(cui);
           const phone=validPhone(record?.date_generale?.telefon);
           const status=record ? (phone?"candidate":"missing_phone") : (notFound.has(cui)?"not_found":"unmatched");
-          if(phone) found++; else missing++;
+          if(phone) batchFound++; else batchMissing++;
           statements.push(db.prepare(`
             INSERT INTO maison_anaf_phone(cui,phone,status,source_url,queried_at,anaf_data_date,error)
             VALUES(?,?,?,?,?,?,NULL)
@@ -122,8 +156,11 @@ async function run(env, trigger) {
           INSERT INTO maison_anaf_state(key,value) VALUES('last_cui',?)
           ON CONFLICT(key) DO UPDATE SET value=excluded.value
         `).bind(String(batch[batch.length-1])));
+        await renewLease(db,owner);
         await db.batch(statements);
         checked+=batch.length;
+        found+=batchFound;
+        missing+=batchMissing;
       } catch(e) {
         failed+=batch.length;
         detail=`Batch starting CUI ${batch[0]} failed: ${String(e.message||e).slice(0,250)}`;
@@ -133,6 +170,12 @@ async function run(env, trigger) {
     }
   } catch(e) {
     detail=`Run failed: ${String(e.message||e).slice(0,300)}`;
+  } finally {
+    if(leaseHeld) {
+      try {await releaseLease(db,owner);} catch(e) {
+        detail+=` | lease release failed: ${String(e.message||e).slice(0,100)}`;
+      }
+    }
   }
   try {
     await db.prepare("INSERT INTO maison_anaf_runs(run_at,checked,found,missing,failed,detail) VALUES(?,?,?,?,?,?)")
