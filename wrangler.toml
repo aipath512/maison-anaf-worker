@@ -12,3 +12,7 @@ DAILY_LIMIT = "1000"
 binding = "DB"
 database_name = "b2b-romania-db"
 database_id = "0d6de488-285f-458b-b4b0-5f9ac913c5f1"
+[observability.logs]
+enabled = true
+invocation_logs = true
+persist = true
