@@ -63,20 +63,33 @@ function validPhone(v) {
   return digits(raw).length>=9 && digits(raw).length<=15 ? raw : null;
 }
 async function fetchAnaf(batch, date) {
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(), 25000);
-  try {
-    const res=await fetch(ANAF_URL,{
-      method:"POST", headers:{"Content-Type":"application/json","Accept":"application/json"},
-      body:JSON.stringify(batch.map(cui=>({cui,data:date}))),
-      signal:controller.signal
-    });
-    if(!res.ok) throw new Error(`ANAF HTTP ${res.status}: ${(await res.text()).slice(0,250)}`);
-    const body=await res.json();
-    if(!Array.isArray(body.found) || !Array.isArray(body.notFound))
-      throw new Error("Unexpected ANAF JSON structure; no data persisted");
-    return body;
-  } finally {clearTimeout(timer);}
+  let lastError;
+  for (let attempt=1; attempt<=3; attempt++) {
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(), 25000);
+    try {
+      const res=await fetch(ANAF_URL,{
+        method:"POST", headers:{"Content-Type":"application/json","Accept":"application/json"},
+        body:JSON.stringify(batch.map(cui=>({cui,data:date}))),
+        signal:controller.signal
+      });
+      if(!res.ok) {
+        const message=`ANAF HTTP ${res.status}: ${(await res.text()).slice(0,250)}`;
+        if(![429,500,502,503,504,520,521,522,523,524].includes(res.status)) throw new Error(message);
+        lastError=new Error(message);
+      } else {
+        const body=await res.json();
+        if(!Array.isArray(body.found) || !Array.isArray(body.notFound))
+          throw new Error("Unexpected ANAF JSON structure; no data persisted");
+        return body;
+      }
+    } catch(e) {
+      lastError=e;
+      if(String(e.message||e).startsWith("Unexpected ANAF") || /ANAF HTTP 4(?!29)/.test(String(e.message||e))) throw e;
+    } finally {clearTimeout(timer);}
+    if(attempt<3) await new Promise(resolve=>setTimeout(resolve,1000*attempt));
+  }
+  throw lastError;
 }
 
 async function acquireLease(db, owner) {
