@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-10-22"
 
 [triggers]
-crons =  ["*/10 * * * *"]
+crons = ["17 5 * * *"]  # o dată pe zi, 05:17 UTC = 07:17 ora RO (iarna) — 2026-11-03
 
 [vars]
 DAILY_LIMIT = "1000"
