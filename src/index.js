@@ -1,7 +1,3 @@
---9e843ca70e96de36d54d3fef287c4c6435defde640bc2e88b111658a3ef2
-Content-Disposition: form-data; name="index.js"; filename="index.js"
-Content-Type: application/javascript+module
-
 /**
  * MAISON / ANAF — daily enrichment, evidence-first.   v2.8 · 2026-10-25
  *
@@ -780,5 +776,3 @@ async function run(env, trigger) {
   }
   console.log(JSON.stringify({checked:S.checked,found:S.found,missing:S.missing,failed:S.failed,detail:S.detail}));
 }
-
---9e843ca70e96de36d54d3fef287c4c6435defde640bc2e88b111658a3ef2--
